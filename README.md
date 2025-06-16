@@ -41,15 +41,18 @@ This tool solves all these problems with a user-friendly interface that handles 
 
 ### Option 2: Clone Repository
 
+
 ```bash
 git clone https://github.com/YOUR_USERNAME/claude-desktop-mcp-manager.git
 cd claude-desktop-mcp-manager
 python mcp_manager.py
 ```
 
-### Option 3: Executable (Coming Soon)
+### Option 3: Executable
 
-Pre-compiled executables for Windows, macOS, and Linux will be available in the releases section.
+Pre-compiled executable for Windows: [Windows_v1.0.0.zip](Windows_v1.0.0.zip)
+
+
 
 ## Usage
 

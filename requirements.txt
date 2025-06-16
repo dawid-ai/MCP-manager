@@ -1,0 +1,14 @@
+# Claude Desktop MCP Manager Requirements
+# This tool primarily uses Python standard library modules
+
+# tkinter is required but usually comes with Python
+# If you're on a minimal Python installation, you might need:
+# python-tk (Linux)
+# tkinter (some distributions)
+
+# For building executables (optional):
+pyinstaller>=5.0.0
+cx-Freeze>=6.0.0
+
+# No additional runtime dependencies required!
+# The tool is designed to work with Python's standard library only.

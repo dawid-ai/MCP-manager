@@ -11,6 +11,7 @@ jobs:
   build:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ['3.8', '3.9', '3.10', '3.11', '3.12']
@@ -58,8 +59,17 @@ jobs:
             print('✅ Application code validated successfully')
         except Exception as e:
             print(f'❌ Import failed: {e}')
+            # Write full exception to a file to ensure it's captured
+            with open('importerror.log', 'w') as f_err:
+                import traceback
+                traceback.print_exc(file=f_err)
             sys.exit(1)
         "
+    - name: Display Import Error (Linux/macOS)
+      if: runner.os != 'Windows' && failure()
+      run: |
+        echo "Python script execution failed. Error log:"
+        cat importerror.log
 
     - name: Test application (Windows)
       if: runner.os == 'Windows'

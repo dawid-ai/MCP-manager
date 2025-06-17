@@ -1,3 +1,25 @@
+def ok_clicked(self):
+        name = self.name_var.get().strip()
+        command = self.command_var.get().strip()
+        args = self.args_var.get().strip()
+        env_text = self.env_text.get('1.0', tk.END).strip()
+        
+        print(f"Dialog OK clicked - Name: '{name}', Command: '{command}', Args: '{args}', Env: '{env_text}'")
+        
+        if not name:
+            messagebox.showerror("Error", "Server name is required")
+            return
+        
+        if not command:
+            messagebox.showerror("Error", "Command is required")
+            return
+        
+        env = self.parse_env_vars(env_text) if env_text else {}
+        
+        print(f"Parsed environment variables: {env}")
+        self.result = (name, command, args, env)
+        print(f"Dialog result set to: {self.result}")
+        self.dialog.destroy()
 #!/usr/bin/env python3
 """
 Claude Desktop MCP Manager
@@ -63,198 +85,6 @@ class MCPManager:
         self.check_db_version()
         self.load_marketplace_servers()
         self.check_app_version() # Check for app updates
-
-    # Placeholder methods for new marketplace DB management buttons
-    def add_new_marketplace_server(self):
-        self.log("Opening Add New Marketplace Server dialog...")
-        dialog = MarketplaceServerDialog(self.root, title="Add New Marketplace Server")
-        self.root.wait_window(dialog.dialog)
-
-        if dialog.result:
-            (name, description, instructions, owner_name, owner_link, 
-             repo_link, command, args_json_str, env_json_str) = dialog.result
-            
-            self.log(f"Attempting to add new marketplace server: {name}")
-            conn = None
-            try:
-                conn = sqlite3.connect(self.marketplace_db_path)
-                cursor = conn.cursor()
-                # Ensure your table and column names match exactly
-                cursor.execute("""
-                    INSERT INTO servers (name, description, instructions, owner_name, owner_link, 
-                                         repo_link, command, args, env_vars, date_added)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (name, description, instructions, owner_name, owner_link, 
-                      repo_link, command, args_json_str, env_json_str, datetime.now().isoformat()))
-                conn.commit()
-                self.log(f"Successfully added server '{name}' to marketplace.db")
-                messagebox.showinfo("Success", f"Server '{name}' added to marketplace.")
-                self.update_marketplace_db_version() # Update DB version
-                self.load_marketplace_servers() # Refresh treeview
-            except sqlite3.IntegrityError as e: # Catch issues like UNIQUE constraint violation for name
-                self.log(f"SQLite IntegrityError adding server '{name}': {e}")
-                messagebox.showerror("Database Error", f"Could not add server '{name}'. It might already exist or there's a data conflict: {e}")
-            except sqlite3.Error as e:
-                self.log(f"SQLite error adding server '{name}': {e}")
-                messagebox.showerror("Database Error", f"Failed to add server to marketplace: {e}")
-            finally:
-                if conn:
-                    conn.close()
-        else:
-            self.log("Add new marketplace server dialog cancelled.")
-
-    def edit_selected_marketplace_server(self):
-        self.log("Attempting to edit selected marketplace server...")
-        selection = self.marketplace_tree.selection()
-        if not selection:
-            messagebox.showwarning("No Server Selected", "Please select a server from the marketplace list to edit.")
-            self.log("Edit marketplace server failed: No server selected.")
-            return
-
-        item = self.marketplace_tree.item(selection[0])
-        selected_server_name_in_tree = item['values'][0]
-        self.log(f"Selected server for editing: {selected_server_name_in_tree}")
-
-        conn = None
-        original_server_data = None
-        server_id = None
-        try:
-            conn = sqlite3.connect(self.marketplace_db_path)
-            cursor = conn.cursor()
-            # Fetch all columns including the primary key 'id'
-            cursor.execute("""
-                SELECT id, name, description, instructions, owner_name, owner_link, 
-                       repo_link, command, args, env_vars 
-                FROM servers WHERE name = ?
-            """, (selected_server_name_in_tree,))
-            original_server_data_tuple = cursor.fetchone()
-
-            if not original_server_data_tuple:
-                messagebox.showerror("Error", f"Could not fetch details for server '{selected_server_name_in_tree}' from the database.")
-                self.log(f"Failed to fetch details for '{selected_server_name_in_tree}'.")
-                return
-            
-            # Store data in a dictionary for easier access, and get column names
-            column_names = [desc[0] for desc in cursor.description]
-            original_server_data = dict(zip(column_names, original_server_data_tuple))
-            server_id = original_server_data['id'] # Crucial for WHERE clause in UPDATE
-
-            self.log(f"Fetched data for editing (ID: {server_id}): {original_server_data}")
-
-        except sqlite3.Error as e:
-            messagebox.showerror("Database Error", f"Error fetching server details: {e}")
-            self.log(f"SQLite error fetching details for '{selected_server_name_in_tree}': {e}")
-            if conn:
-                conn.close()
-            return
-        finally:
-            if conn and original_server_data is None: # Ensure connection is closed if we exited early
-                conn.close()
-
-
-        # Ensure args and env_vars are not None before passing to dialog
-        args_str = original_server_data.get('args', '[]') or '[]'
-        env_vars_str = original_server_data.get('env_vars', '{}') or '{}'
-
-        dialog = MarketplaceServerDialog(
-            self.root, 
-            title=f"Edit Marketplace Server: {original_server_data['name']}",
-            name=original_server_data['name'],
-            description=original_server_data.get('description', ''),
-            instructions=original_server_data.get('instructions', ''),
-            owner_name=original_server_data.get('owner_name', ''),
-            owner_link=original_server_data.get('owner_link', ''),
-            repo_link=original_server_data.get('repo_link', ''),
-            command=original_server_data.get('command', ''),
-            args_str=args_str,
-            env_vars_str=env_vars_str
-        )
-        self.root.wait_window(dialog.dialog)
-
-        if dialog.result:
-            (new_name, new_description, new_instructions, new_owner_name, 
-             new_owner_link, new_repo_link, new_command, 
-             new_args_json_str, new_env_json_str) = dialog.result
-            
-            self.log(f"Attempting to update marketplace server ID: {server_id} (Original Name: {original_server_data['name']}, New Name: {new_name})")
-            try:
-                # Re-use connection if still open from fetch, or reconnect
-                if conn is None or conn.total_changes == -1: # Check if connection was closed or is unusable
-                    conn = sqlite3.connect(self.marketplace_db_path)
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE servers 
-                    SET name=?, description=?, instructions=?, owner_name=?, owner_link=?, 
-                        repo_link=?, command=?, args=?, env_vars=?
-                    WHERE id = ?
-                """, (new_name, new_description, new_instructions, new_owner_name, 
-                      new_owner_link, new_repo_link, new_command, 
-                      new_args_json_str, new_env_json_str, server_id))
-                conn.commit()
-                self.log(f"Successfully updated server ID: {server_id} in marketplace.db")
-                messagebox.showinfo("Success", f"Server '{new_name}' updated in marketplace.")
-                self.update_marketplace_db_version() # Update DB version
-                self.load_marketplace_servers() # Refresh treeview
-            except sqlite3.IntegrityError as e:
-                 self.log(f"SQLite IntegrityError updating server ID {server_id}: {e}")
-                 messagebox.showerror("Database Error", f"Could not update server '{new_name}'. The name might already exist or there's a data conflict: {e}")
-            except sqlite3.Error as e:
-                self.log(f"SQLite error updating server ID {server_id}: {e}")
-                messagebox.showerror("Database Error", f"Failed to update server in marketplace: {e}")
-            finally:
-                if conn:
-                    conn.close()
-        else:
-            self.log(f"Edit marketplace server dialog cancelled for server ID: {server_id}.")
-            if conn: # Ensure connection is closed if dialog was cancelled
-                 conn.close()
-
-
-    def remove_selected_marketplace_server(self):
-        self.log("Attempting to remove selected marketplace server...")
-        selection = self.marketplace_tree.selection()
-        if not selection:
-            messagebox.showwarning("No Server Selected", "Please select a server from the marketplace list to remove.")
-            self.log("Remove marketplace server failed: No server selected.")
-            return
-
-        item = self.marketplace_tree.item(selection[0])
-        server_name_to_remove = item['values'][0] # Name is the first value in the tree row
-
-        if not messagebox.askyesno("Confirm Removal", 
-                                   f"Are you sure you want to remove the server '{server_name_to_remove}' from the marketplace? This action cannot be undone.",
-                                   icon='warning'):
-            self.log(f"User cancelled removal of server: {server_name_to_remove}")
-            return
-
-        self.log(f"User confirmed removal of server: {server_name_to_remove}")
-        conn = None
-        try:
-            conn = sqlite3.connect(self.marketplace_db_path)
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM servers WHERE name = ?", (server_name_to_remove,))
-            conn.commit()
-
-            if cursor.rowcount > 0:
-                self.log(f"Successfully removed server '{server_name_to_remove}' from marketplace.db. Rows affected: {cursor.rowcount}")
-                messagebox.showinfo("Success", f"Server '{server_name_to_remove}' removed successfully from the marketplace.")
-                self.update_marketplace_db_version() # Update DB version
-            else:
-                self.log(f"No server found with name '{server_name_to_remove}' to remove, though it was selected. Rows affected: {cursor.rowcount}")
-                messagebox.showwarning("Not Found", f"Server '{server_name_to_remove}' was not found in the database for removal, it might have been removed already.")
-            
-            self.load_marketplace_servers() # Refresh treeview
-            self.server_details_text.config(state='normal') # Clear details text
-            self.server_details_text.delete('1.0', tk.END)
-            self.server_details_text.config(state='disabled')
-            self.selected_marketplace_server_details = None
-
-        except sqlite3.Error as e:
-            self.log(f"SQLite error removing server '{server_name_to_remove}': {e}")
-            messagebox.showerror("Database Error", f"Failed to remove server '{server_name_to_remove}' from the marketplace: {e}")
-        finally:
-            if conn:
-                conn.close()
         
     def load_user_config(self):
         """Load user configuration file with custom paths"""
@@ -599,33 +429,13 @@ Attribution to https://dawid.ai must be maintained in distributions.
 
         # Bottom Section (Details & Add Button)
         bottom_frame = ttk.Frame(main_frame)
-        bottom_frame.pack(fill='x', pady=(10,0)) # Added some top padding to separate from treeview
+        bottom_frame.pack(fill='x')
 
-        # Server details text area (now at the top of bottom_frame)
         self.server_details_text = scrolledtext.ScrolledText(bottom_frame, height=6, wrap=tk.WORD, state='disabled')
-        self.server_details_text.pack(fill='x', expand=True, side=tk.TOP, pady=(0,10))
+        self.server_details_text.pack(fill='x', expand=True, side=tk.LEFT, padx=(0,10))
 
-        # Frame for all action buttons
-        actions_frame = ttk.Frame(bottom_frame)
-        actions_frame.pack(fill='x')
-
-        # Frame for DB management buttons (aligned left)
-        db_actions_frame = ttk.Frame(actions_frame)
-        db_actions_frame.pack(side=tk.LEFT)
-
-        self.add_new_db_server_button = ttk.Button(db_actions_frame, text="Add New Server", command=self.add_new_marketplace_server)
-        self.add_new_db_server_button.pack(side=tk.LEFT, padx=(0, 5))
-
-        self.edit_selected_db_server_button = ttk.Button(db_actions_frame, text="Edit Selected Server", command=self.edit_selected_marketplace_server)
-        self.edit_selected_db_server_button.pack(side=tk.LEFT, padx=(0, 5))
-
-        self.remove_selected_db_server_button = ttk.Button(db_actions_frame, text="Remove Selected Server", command=self.remove_selected_marketplace_server)
-        self.remove_selected_db_server_button.pack(side=tk.LEFT, padx=(0,5))
-        
-        # Existing button to add to local MCP Manager (aligned right)
-        self.add_from_marketplace_button = ttk.Button(actions_frame, text="Add to MCP Manager", command=self.add_server_from_marketplace)
-        self.add_from_marketplace_button.pack(side=tk.RIGHT, anchor='e')
-
+        self.add_from_marketplace_button = ttk.Button(bottom_frame, text="Add to MCP Manager", command=self.add_server_from_marketplace)
+        self.add_from_marketplace_button.pack(side=tk.RIGHT, anchor='center', pady=(5,0))
 
     def on_marketplace_server_select(self, event):
         self.server_details_text.config(state='normal')
@@ -743,7 +553,30 @@ Attribution to https://dawid.ai must be maintained in distributions.
         local_version_string = "N/A"
         self.log(f"Checking local DB at: {self.marketplace_db_path}")
         if self.marketplace_db_path.exists():
-            local_version_string = self.get_marketplace_db_version() # Use new method
+            conn = None
+            try:
+                conn = sqlite3.connect(self.marketplace_db_path)
+                cursor = conn.cursor()
+                # Ensure the table and query are correct.
+                # This assumes a 'metadata' table with 'key' and 'value' columns.
+                cursor.execute("SELECT value FROM metadata WHERE key = 'version'")
+                row = cursor.fetchone()
+                if row:
+                    local_version_string = row[0]
+                    self.log(f"Found local DB version: {local_version_string}")
+                else:
+                    local_version_string = "Unknown (no version)"
+                    self.log("Local DB version key not found in metadata.")
+            except sqlite3.Error as e:
+                # This can happen if the DB is not initialized, table doesn't exist, etc.
+                self.log(f"SQLite error while reading local DB version: {e}")
+                local_version_string = "Unknown (DB error)"
+            except Exception as e:
+                self.log(f"Unexpected error reading local DB version: {e}")
+                local_version_string = "Error"
+            finally:
+                if conn:
+                    conn.close()
         else:
             local_version_string = "Not found"
             self.log("Local DB file does not exist.")
@@ -752,86 +585,6 @@ Attribution to https://dawid.ai must be maintained in distributions.
             self.local_db_version_label.config(text=f"Local DB: {local_version_string}")
 
         self.log(f"DB Versions - Local: {local_version_string}, Remote: {remote_version_string}")
-
-    def get_marketplace_db_version(self) -> str:
-        """Gets the version from the marketplace DB, initializes if not present."""
-        default_version = "1.0.0"
-        conn = None
-        try:
-            conn = sqlite3.connect(self.marketplace_db_path)
-            cursor = conn.cursor()
-            
-            # Ensure metadata table exists
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS metadata (
-                    key TEXT PRIMARY KEY,
-                    value TEXT
-                )
-            """)
-            conn.commit()
-
-            cursor.execute("SELECT value FROM metadata WHERE key = 'version'")
-            row = cursor.fetchone()
-            if row:
-                self.log(f"Found local DB version in get_marketplace_db_version: {row[0]}")
-                return row[0]
-            else:
-                self.log("No version key found in metadata. Initializing to 1.0.0.")
-                # Key not found, insert default version
-                cursor.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('version', ?)", (default_version,))
-                conn.commit()
-                return default_version
-        except sqlite3.Error as e:
-            self.log(f"SQLite error in get_marketplace_db_version: {e}. Returning default version.")
-            return default_version # Fallback on error
-        finally:
-            if conn:
-                conn.close()
-
-    def update_marketplace_db_version(self):
-        """Increments the patch number of the marketplace DB version."""
-        self.log("Attempting to update marketplace DB version...")
-        current_version_str = self.get_marketplace_db_version()
-        
-        new_version_str = ""
-        try:
-            parts = current_version_str.split('.')
-            if len(parts) == 3 and all(p.isdigit() for p in parts):
-                major, minor, patch = map(int, parts)
-                patch += 1
-                new_version_str = f"{major}.{minor}.{patch}"
-            else:
-                # If format is unexpected, try to append ".1" or set a new default
-                self.log(f"Unexpected version format '{current_version_str}'. Attempting to reset or append.")
-                if current_version_str == "1.0.0" or not current_version_str : # Handles initial or corrupted
-                     new_version_str = "1.0.1"
-                else: # Append .1 if it's some other non-standard string
-                     new_version_str = f"{current_version_str}.1" 
-                     # Or more safely, always reset to a known good next version
-                     # new_version_str = "1.0.1" # if previous was "1.0.0"
-        except Exception as e:
-            self.log(f"Error parsing version string '{current_version_str}': {e}. Setting to default '1.0.1'.")
-            new_version_str = "1.0.1" # Fallback
-
-        if not new_version_str: # Should not happen if logic above is correct
-            self.log("Failed to determine new version string. Aborting update.")
-            return
-
-        conn = None
-        try:
-            conn = sqlite3.connect(self.marketplace_db_path)
-            cursor = conn.cursor()
-            cursor.execute("INSERT OR REPLACE INTO metadata (key, value) VALUES ('version', ?)", (new_version_str,))
-            conn.commit()
-            self.log(f"Marketplace DB version updated from '{current_version_str}' to '{new_version_str}'.")
-            # Update the label in the UI as well
-            if hasattr(self, 'local_db_version_label'):
-                self.local_db_version_label.config(text=f"Local DB: {new_version_str}")
-        except sqlite3.Error as e:
-            self.log(f"SQLite error updating DB version: {e}")
-        finally:
-            if conn:
-                conn.close()
 
     def update_local_db(self):
         self.log("Starting local marketplace database update process...")
@@ -1713,250 +1466,6 @@ class ServerDialog:
     def cancel_clicked(self):
         self.dialog.destroy()
 
-class MarketplaceServerDialog:
-    def __init__(self, parent, title, name="", description="", instructions="", 
-                 owner_name="", owner_link="", repo_link="", command="", 
-                 args_str='[]', env_vars_str='{}'):
-        self.result = None
-        
-        self.dialog = tk.Toplevel(parent)
-        self.dialog.title(title)
-        # Adjusted height for JSON import section
-        self.dialog.geometry("700x950") 
-        self.dialog.transient(parent)
-        self.dialog.grab_set()
-        
-        self.dialog.update_idletasks()
-        x = (self.dialog.winfo_screenwidth() // 2) - (700 // 2)
-        y = (self.dialog.winfo_screenheight() // 2) - (800 // 2)
-        self.dialog.geometry(f"700x800+{x}+{y}")
-        
-        main_frame = ttk.Frame(self.dialog, padding="20")
-        main_frame.pack(fill='both', expand=True)
-        main_frame.columnconfigure(1, weight=1) # Allow second column to expand
-
-        current_row = 0
-
-        # Server Name
-        ttk.Label(main_frame, text="Server Name*:").grid(row=current_row, column=0, sticky=tk.W, pady=(0, 5))
-        self.name_var = tk.StringVar(value=name)
-        name_entry = ttk.Entry(main_frame, textvariable=self.name_var, width=60)
-        name_entry.grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=(0, 5))
-        current_row += 1
-
-        # Description
-        ttk.Label(main_frame, text="Description:").grid(row=current_row, column=0, sticky=(tk.W, tk.N), pady=(0, 5))
-        self.desc_text = tk.Text(main_frame, height=4, width=60, wrap=tk.WORD)
-        self.desc_text.insert('1.0', description)
-        self.desc_text.grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=(0, 5))
-        main_frame.rowconfigure(current_row, weight=0) # Adjust weight as needed
-        current_row += 1
-
-        # Instructions
-        ttk.Label(main_frame, text="Instructions:").grid(row=current_row, column=0, sticky=(tk.W, tk.N), pady=(0, 5))
-        self.instr_text = tk.Text(main_frame, height=6, width=60, wrap=tk.WORD)
-        self.instr_text.insert('1.0', instructions)
-        self.instr_text.grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=(0, 5))
-        main_frame.rowconfigure(current_row, weight=0) # Adjust weight as needed
-        current_row += 1
-
-        # Owner Name
-        ttk.Label(main_frame, text="Owner Name:").grid(row=current_row, column=0, sticky=tk.W, pady=(0, 5))
-        self.owner_name_var = tk.StringVar(value=owner_name)
-        ttk.Entry(main_frame, textvariable=self.owner_name_var, width=60).grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=(0, 5))
-        current_row += 1
-
-        # Owner Link
-        ttk.Label(main_frame, text="Owner Link (URL):").grid(row=current_row, column=0, sticky=tk.W, pady=(0, 5))
-        self.owner_link_var = tk.StringVar(value=owner_link)
-        ttk.Entry(main_frame, textvariable=self.owner_link_var, width=60).grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=(0, 5))
-        current_row += 1
-
-        # Repository Link
-        ttk.Label(main_frame, text="Repo Link (URL):").grid(row=current_row, column=0, sticky=tk.W, pady=(0, 5))
-        self.repo_link_var = tk.StringVar(value=repo_link)
-        ttk.Entry(main_frame, textvariable=self.repo_link_var, width=60).grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=(0, 5))
-        current_row += 1
-        
-        # Command
-        ttk.Label(main_frame, text="Command*:").grid(row=current_row, column=0, sticky=tk.W, pady=(0, 5))
-        self.command_var = tk.StringVar(value=command)
-        ttk.Entry(main_frame, textvariable=self.command_var, width=60).grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=(0, 5))
-        current_row += 1
-
-        # Arguments (JSON list string)
-        ttk.Label(main_frame, text="Arguments (JSON list):").grid(row=current_row, column=0, sticky=tk.W, pady=(0, 5))
-        self.args_var = tk.StringVar(value=args_str)
-        args_entry = ttk.Entry(main_frame, textvariable=self.args_var, width=60)
-        args_entry.grid(row=current_row, column=1, sticky=(tk.W, tk.E), pady=(0, 5))
-        ttk.Label(main_frame, text="Example: [\"--port\", \"8000\", \"--verbose\"]", font=('Arial', 8), foreground='gray').grid(
-            row=current_row + 1, column=1, sticky=tk.W, pady=(0,10))
-        current_row += 2
-
-
-        # Environment Variables (JSON object string)
-        ttk.Label(main_frame, text="Environment Variables (JSON object):").grid(row=current_row, column=0, sticky=(tk.W, tk.N), pady=(0, 5))
-        env_frame = ttk.Frame(main_frame)
-        env_frame.grid(row=current_row, column=1, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 5))
-        env_frame.columnconfigure(0, weight=1)
-        env_frame.rowconfigure(0, weight=1)
-        # main_frame.rowconfigure(current_row, weight=1) # Make env_text area expand if needed
-
-        self.env_text = tk.Text(env_frame, height=5, width=60) # Adjusted height
-        self.env_text.insert('1.0', env_vars_str)
-        env_scrollbar = ttk.Scrollbar(env_frame, orient=tk.VERTICAL, command=self.env_text.yview)
-        self.env_text.configure(yscrollcommand=env_scrollbar.set)
-        self.env_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        env_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        
-        ttk.Label(main_frame, text="Example: {\"API_KEY\": \"your_key\", \"DEBUG\": \"true\"}", font=('Arial', 8), foreground='gray').grid(
-            row=current_row + 1, column=1, sticky=tk.W, pady=(0,10))
-        current_row += 2
-        
-        # Buttons
-        button_frame = ttk.Frame(main_frame)
-        # Ensure button_frame is placed below all other content
-        button_frame.grid(row=current_row, column=0, columnspan=2, pady=(15, 0), sticky=tk.S)
-        
-        ttk.Button(button_frame, text="OK", command=self.ok_clicked).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(button_frame, text="Cancel", command=self.cancel_clicked).pack(side=tk.LEFT)
-
-        current_row +=1 # Move to next row for JSON import section
-
-        # --- JSON Import Section ---
-        json_import_frame = ttk.LabelFrame(main_frame, text="Import from JSON", padding="10")
-        json_import_frame.grid(row=current_row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(20, 0))
-        json_import_frame.columnconfigure(0, weight=1) # Allow text widget to expand
-
-        ttk.Label(json_import_frame, text="Paste MCP Server JSON here (expects format: {\"mcpServers\": {\"your_server_name\": {...}}}):").pack(anchor='w', pady=(0,5))
-        
-        self.json_import_text = tk.Text(json_import_frame, height=7, width=80) # Adjusted width to match other fields roughly
-        self.json_import_text.pack(fill='x', expand=True, pady=(0,5))
-
-        self.parse_json_button = ttk.Button(json_import_frame, text="Parse JSON and Populate Fields", command=self.parse_and_populate_from_json)
-        self.parse_json_button.pack(pady=(5,0))
-        
-        self.dialog.bind('<Return>', lambda e: self.ok_clicked() if not isinstance(e.widget, tk.Text) else None)
-        self.dialog.bind('<Escape>', lambda e: self.cancel_clicked())
-        
-        name_entry.focus_set()
-
-    def parse_and_populate_from_json(self):
-        json_string = self.json_import_text.get('1.0', tk.END).strip()
-        if not json_string:
-            messagebox.showwarning("Empty JSON", "JSON input is empty.", parent=self.dialog)
-            return
-
-        try:
-            data = json.loads(json_string)
-        except json.JSONDecodeError as e:
-            messagebox.showerror("JSON Error", f"Invalid JSON: {e}", parent=self.dialog)
-            return
-
-        if not isinstance(data, dict):
-            messagebox.showerror("JSON Error", "Top level JSON must be an object.", parent=self.dialog)
-            return
-
-        if "mcpServers" not in data:
-            messagebox.showerror("JSON Error", "Missing 'mcpServers' key in JSON.", parent=self.dialog)
-            return
-
-        mcp_servers = data["mcpServers"]
-        if not isinstance(mcp_servers, dict):
-            messagebox.showerror("JSON Error", "'mcpServers' value must be an object.", parent=self.dialog)
-            return
-        
-        if not mcp_servers:
-            messagebox.showwarning("Empty Server List", "'mcpServers' object contains no server entries.", parent=self.dialog)
-            return
-
-        server_names = list(mcp_servers.keys())
-        server_name_to_import = server_names[0]
-        server_data = mcp_servers[server_name_to_import]
-
-        if len(server_names) > 1:
-            # In a real scenario, you might prompt the user to choose one.
-            # For now, we just take the first one and inform the user.
-            print(f"Multiple servers found in JSON. Importing the first one: '{server_name_to_import}'")
-            messagebox.showinfo("Multiple Servers", 
-                                f"Multiple servers found. Importing the first one: '{server_name_to_import}'.", 
-                                parent=self.dialog)
-
-
-        # Extract data, providing defaults for safety
-        name = server_name_to_import # Key is the name
-        command = server_data.get("command", "")
-        args_list = server_data.get("args", [])
-        env_dict = server_data.get("env", {})
-
-        if not isinstance(args_list, list):
-            messagebox.showerror("JSON Error", f"Server '{name}' 'args' must be a list.", parent=self.dialog)
-            return
-        if not isinstance(env_dict, dict):
-            messagebox.showerror("JSON Error", f"Server '{name}' 'env' must be an object.", parent=self.dialog)
-            return
-            
-        # Populate the fields
-        self.name_var.set(name)
-        self.command_var.set(command)
-        self.args_var.set(json.dumps(args_list)) # Store as JSON string
-        
-        self.env_text.delete('1.0', tk.END)
-        self.env_text.insert('1.0', json.dumps(env_dict)) # Store as JSON string
-        
-        # Description, Instructions, Owner, Repo are not typically in this JSON, so they are NOT cleared/updated.
-        # User is expected to fill them if needed.
-
-        messagebox.showinfo("Success", 
-                            f"Fields populated from JSON for server '{name}'.\n"
-                            "Please review, fill any additional fields (like description, instructions), and click OK.", 
-                            parent=self.dialog)
-
-
-    def ok_clicked(self):
-        name = self.name_var.get().strip()
-        description = self.desc_text.get('1.0', tk.END).strip()
-        instructions = self.instr_text.get('1.0', tk.END).strip()
-        owner_name = self.owner_name_var.get().strip()
-        owner_link = self.owner_link_var.get().strip()
-        repo_link = self.repo_link_var.get().strip()
-        command = self.command_var.get().strip()
-        args_json_str = self.args_var.get().strip()
-        env_json_str = self.env_text.get('1.0', tk.END).strip()
-
-        if not name:
-            messagebox.showerror("Error", "Server Name is required.", parent=self.dialog)
-            return
-        if not command:
-            messagebox.showerror("Error", "Command is required.", parent=self.dialog)
-            return
-
-        # Validate Args JSON
-        try:
-            args_val = json.loads(args_json_str)
-            if not isinstance(args_val, list):
-                messagebox.showerror("Error", "Arguments must be a valid JSON list (e.g., [\"--flag\"]).", parent=self.dialog)
-                return
-        except json.JSONDecodeError:
-            messagebox.showerror("Error", "Arguments field contains invalid JSON.", parent=self.dialog)
-            return
-        
-        # Validate Env Vars JSON
-        try:
-            env_val = json.loads(env_json_str)
-            if not isinstance(env_val, dict):
-                messagebox.showerror("Error", "Environment Variables must be a valid JSON object (e.g., {\"KEY\": \"value\"}).", parent=self.dialog)
-                return
-        except json.JSONDecodeError:
-            messagebox.showerror("Error", "Environment Variables field contains invalid JSON.", parent=self.dialog)
-            return
-
-        self.result = (name, description, instructions, owner_name, owner_link, 
-                       repo_link, command, args_json_str, env_json_str)
-        self.dialog.destroy()
-
-    def cancel_clicked(self):
-        self.dialog.destroy()
 
 def main():
     # Enable console output on Windows

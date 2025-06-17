@@ -19,7 +19,8 @@ def ok_clicked(self):
         print(f"Parsed environment variables: {env}")
         self.result = (name, command, args, env)
         print(f"Dialog result set to: {self.result}")
-        self.dialog.destroy()#!/usr/bin/env python3
+        self.dialog.destroy()
+#!/usr/bin/env python3
 """
 Claude Desktop MCP Manager
 A GUI tool for managing MCP (Model Context Protocol) servers in claude_desktop_config.json
@@ -44,8 +45,8 @@ import webbrowser
 
 class MCPManager:
     APP_VERSION = "1.0.0"
-    APP_LATEST_VERSION_URL = "YOUR_GITHUB_REPO_RAW_APP_VERSION_TXT_URL_HERE"  # Placeholder
-    APP_RELEASES_PAGE_URL = "YOUR_GITHUB_REPO_RELEASES_PAGE_URL_HERE"    # Placeholder
+    APP_LATEST_VERSION_URL = "https://raw.githubusercontent.com/dawid-ai/MCP-manager/refs/heads/feat/marketplace-and-version-check/mcp_manager_ver.txt"
+    APP_RELEASES_PAGE_URL = "https://github.com/dawid-ai/MCP-manager"
 
     def __init__(self, root):
         self.root = root
@@ -63,9 +64,10 @@ class MCPManager:
         self.backup_dir.mkdir(exist_ok=True)
 
         # Marketplace DB settings
-        self.marketplace_db_path = Path.home() / ".mcp_manager_data" / "marketplace.db"
-        self.marketplace_db_url = "YOUR_GITHUB_REPO_RAW_DB_URL_HERE"  # Placeholder
-        self.marketplace_version_url = "YOUR_GITHUB_REPO_RAW_VERSION_TXT_URL_HERE"  # Placeholder
+        #self.marketplace_db_path = Path.home() / ".mcp_manager_data" / "marketplace.db"
+        self.marketplace_db_path = Path(os.path.abspath(os.path.join(os.path.dirname(__file__), "marketplace.db")))
+        self.marketplace_db_url = "https://github.com/dawid-ai/MCP-manager/raw/refs/heads/feat/marketplace-and-version-check/marketplace.db"  # Placeholder
+        self.marketplace_version_url = "https://raw.githubusercontent.com/dawid-ai/MCP-manager/refs/heads/feat/marketplace-and-version-check/marketplace_ver.txt"  # Placeholder
         self.marketplace_db_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Data storage

@@ -313,7 +313,48 @@ Attribution to https://dawid.ai must be maintained in distributions.
         
         ttk.Button(button_frame, text="Visit dawid.ai", command=self.open_website).pack(side=tk.LEFT)
         ttk.Button(button_frame, text="Close", command=about_dialog.destroy).pack(side=tk.RIGHT)
-    
+
+    def open_releases_page(self):
+        self.log(f"Opening releases page: {MCPManager.APP_RELEASES_PAGE_URL}")
+        try:
+            webbrowser.open(MCPManager.APP_RELEASES_PAGE_URL, new=2) # new=2 opens in new tab if possible
+        except Exception as e:
+            self.log(f"Error opening releases page: {e}")
+            messagebox.showerror("Error", f"Could not open releases page: {e}")
+
+    def check_app_version(self):
+        self.log("Checking for application updates...")
+        if not hasattr(self, 'update_app_button'): # UI not ready
+            self.log("Update_app_button not found, UI not fully ready for app version check.")
+            return
+
+        latest_version_str = None
+        try:
+            with urllib.request.urlopen(MCPManager.APP_LATEST_VERSION_URL, timeout=5) as response:
+                latest_version_str = response.read().decode('utf-8').strip()
+
+            self.log(f"Current app version: {MCPManager.APP_VERSION}, Fetched latest version: {latest_version_str}")
+
+            # Simple version comparison (e.g., "v1.0.1" vs "v1.0.0")
+            # Assumes "vX.Y.Z" format. More robust parsing might be needed for complex scenarios.
+            current_v_parts = tuple(map(int, MCPManager.APP_VERSION.lstrip('v').split('.')))
+            latest_v_parts = tuple(map(int, latest_version_str.lstrip('v').split('.')))
+
+            if latest_v_parts > current_v_parts:
+                self.log(f"Newer version available: {latest_version_str}")
+                self.update_app_button.config(text=f"Update to {latest_version_str}!", style="Accent.TButton")
+                # self.update_app_button.pack() # Or ensure it's visible if previously hidden
+            else:
+                self.log("Application is up-to-date.")
+                self.update_app_button.config(text="Up to Date", state=tk.DISABLED)
+
+        except urllib.error.URLError as e:
+            self.log(f"Could not fetch latest app version (URLError): {e.reason}")
+            self.update_app_button.config(text="Update Check Failed", state=tk.DISABLED)
+        except Exception as e:
+            self.log(f"Error checking app version: {e}")
+            self.update_app_button.config(text="Update Check Error", state=tk.DISABLED)
+
     def setup_console_tab(self, console_tab):
         """Setup the console tab for debugging"""
         console_frame = ttk.Frame(console_tab, padding="10")
@@ -674,6 +715,8 @@ Attribution to https://dawid.ai must be maintained in distributions.
         self.refresh_server_list()  # Update the tree in the main "MCP Servers" tab
         messagebox.showinfo("Success", f"Server '{name}' added/updated in MCP Manager.")
         self.log(f"Server '{name}' successfully added/updated from marketplace with config: {server_config}")
+
+    # open_releases_page and check_app_version are moved above create_widgets
 
     def setup_settings_tab(self, settings_tab):
         """Setup the settings tab for path configuration"""

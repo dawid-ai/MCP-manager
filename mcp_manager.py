@@ -38,11 +38,18 @@ import shutil
 import sys
 import traceback
 from datetime import datetime
+import sqlite3
+import urllib.request
+import webbrowser
 
 class MCPManager:
+    APP_VERSION = "1.0.0"
+    APP_LATEST_VERSION_URL = "YOUR_GITHUB_REPO_RAW_APP_VERSION_TXT_URL_HERE"  # Placeholder
+    APP_RELEASES_PAGE_URL = "YOUR_GITHUB_REPO_RELEASES_PAGE_URL_HERE"    # Placeholder
+
     def __init__(self, root):
         self.root = root
-        self.root.title("Claude Desktop MCP Manager")
+        self.root.title(f"Claude Desktop MCP Manager {MCPManager.APP_VERSION}")
         self.root.geometry("1000x800")
         self.root.minsize(900, 700)
         
@@ -54,10 +61,17 @@ class MCPManager:
         self.config_path = self.get_config_path()
         self.backup_dir = Path.home() / ".mcp_manager_backups"
         self.backup_dir.mkdir(exist_ok=True)
+
+        # Marketplace DB settings
+        self.marketplace_db_path = Path.home() / ".mcp_manager_data" / "marketplace.db"
+        self.marketplace_db_url = "YOUR_GITHUB_REPO_RAW_DB_URL_HERE"  # Placeholder
+        self.marketplace_version_url = "YOUR_GITHUB_REPO_RAW_VERSION_TXT_URL_HERE"  # Placeholder
+        self.marketplace_db_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Data storage
         self.mcp_config = {}
         self.paused_servers = set()  # Servers that are paused (not in config but saved in our tool)
+        self.selected_marketplace_server_details = None # For storing full details of selected marketplace server
         
         # Create GUI
         self.create_widgets()
@@ -66,6 +80,9 @@ class MCPManager:
         self.log(f"Config exists: {self.config_path.exists()}")
         self.load_config()
         self.refresh_server_list()
+        self.check_db_version()
+        self.load_marketplace_servers()
+        self.check_app_version() # Check for app updates
         
     def load_user_config(self):
         """Load user configuration file with custom paths"""
@@ -175,11 +192,16 @@ class MCPManager:
         # Console tab
         console_tab = ttk.Frame(notebook)
         notebook.add(console_tab, text='Console')
+
+        # Marketplace tab
+        marketplace_tab = ttk.Frame(notebook)
+        notebook.add(marketplace_tab, text='Marketplace')
         
         # Setup tabs
         self.setup_main_tab(main_tab)
         self.setup_settings_tab(settings_tab)
         self.setup_console_tab(console_tab)
+        self.setup_marketplace_tab(marketplace_tab)
     
     def create_menu(self):
         """Create application menu bar"""
@@ -241,7 +263,7 @@ class MCPManager:
     
     def show_about(self):
         """Show about dialog"""
-        about_text = """Claude Desktop MCP Manager v1.0.0
+        about_text = f"""Claude Desktop MCP Manager {MCPManager.APP_VERSION}
 
 A comprehensive GUI tool for managing MCP (Model Context Protocol) 
 servers in Claude Desktop's configuration file.
@@ -307,7 +329,352 @@ Attribution to https://dawid.ai must be maintained in distributions.
         
         ttk.Button(button_frame, text="Clear Console", command=self.clear_console).pack(side=tk.LEFT)
         ttk.Button(button_frame, text="Save Log", command=self.save_log).pack(side=tk.LEFT, padx=(10, 0))
-    
+
+    def setup_marketplace_tab(self, tab_frame):
+        """Setup the marketplace tab"""
+        # Clear placeholder content if any (e.g. from previous version)
+        for widget in tab_frame.winfo_children():
+            widget.destroy()
+
+        main_frame = ttk.Frame(tab_frame, padding="10")
+        main_frame.pack(fill='both', expand=True)
+
+        # Top Section (Info & Controls)
+        top_frame = ttk.Frame(main_frame)
+        top_frame.pack(fill='x', pady=(0, 10))
+
+        self.local_db_version_label = ttk.Label(top_frame, text="Local DB: N/A")
+        self.local_db_version_label.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.remote_db_version_label = ttk.Label(top_frame, text="Remote DB: N/A")
+        self.remote_db_version_label.pack(side=tk.LEFT, padx=(0, 20))
+
+        self.update_db_button = ttk.Button(top_frame, text="Update Database", command=self.update_local_db)
+        self.update_db_button.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.search_var = tk.StringVar()
+        search_entry = ttk.Entry(top_frame, textvariable=self.search_var, width=30)
+        search_entry.pack(side=tk.LEFT, padx=(0, 5))
+        search_button = ttk.Button(top_frame, text="Search", command=lambda: self.load_marketplace_servers(self.search_var.get()))
+        search_button.pack(side=tk.LEFT)
+
+        # Middle Section (Server List)
+        tree_frame = ttk.Frame(main_frame)
+        tree_frame.pack(fill='both', expand=True, pady=(0,10))
+
+        columns = ('Name', 'Description', 'Owner')
+        self.marketplace_tree = ttk.Treeview(tree_frame, columns=columns, show='headings')
+
+        self.marketplace_tree.heading('Name', text='Name')
+        self.marketplace_tree.column('Name', width=150, minwidth=100)
+        self.marketplace_tree.heading('Description', text='Description')
+        self.marketplace_tree.column('Description', width=300, minwidth=200)
+        self.marketplace_tree.heading('Owner', text='Owner')
+        self.marketplace_tree.column('Owner', width=100, minwidth=80)
+
+        v_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.marketplace_tree.yview)
+        h_scrollbar = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.marketplace_tree.xview)
+        self.marketplace_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+
+        self.marketplace_tree.grid(row=0, column=0, sticky='nsew')
+        v_scrollbar.grid(row=0, column=1, sticky='ns')
+        h_scrollbar.grid(row=1, column=0, sticky='ew')
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+
+        self.marketplace_tree.bind('<<TreeviewSelect>>', self.on_marketplace_server_select)
+
+        # Bottom Section (Details & Add Button)
+        bottom_frame = ttk.Frame(main_frame)
+        bottom_frame.pack(fill='x')
+
+        self.server_details_text = scrolledtext.ScrolledText(bottom_frame, height=6, wrap=tk.WORD, state='disabled')
+        self.server_details_text.pack(fill='x', expand=True, side=tk.LEFT, padx=(0,10))
+
+        self.add_from_marketplace_button = ttk.Button(bottom_frame, text="Add to MCP Manager", command=self.add_server_from_marketplace)
+        self.add_from_marketplace_button.pack(side=tk.RIGHT, anchor='center', pady=(5,0))
+
+    def on_marketplace_server_select(self, event):
+        self.server_details_text.config(state='normal')
+        self.server_details_text.delete('1.0', tk.END)
+        self.selected_marketplace_server_details = None
+
+        selection = self.marketplace_tree.selection()
+        if not selection:
+            self.server_details_text.config(state='disabled')
+            return
+
+        item = self.marketplace_tree.item(selection[0])
+        server_name_in_tree = item['values'][0] # Name is the first column
+
+        # Check for placeholder messages in the tree
+        placeholder_messages = ["Database not found. Please update.", "No servers found.", "Error loading servers:", "Unexpected error:"]
+        if any(server_name_in_tree.startswith(msg_start) for msg_start in placeholder_messages):
+            self.log(f"Selected item is a placeholder/error message: '{server_name_in_tree}'")
+            self.server_details_text.insert('1.0', server_name_in_tree) # Display the placeholder message itself
+            self.server_details_text.config(state='disabled')
+            return
+
+        self.log(f"Fetching details for marketplace server: {server_name_in_tree}")
+
+        if not self.marketplace_db_path.exists():
+            self.log("Marketplace database file not found for detail view.")
+            self.server_details_text.insert('1.0', "Database not found. Cannot fetch details.")
+            self.server_details_text.config(state='disabled')
+            return
+
+        details_row = None
+        conn = None
+        try:
+            conn = sqlite3.connect(self.marketplace_db_path)
+            cursor = conn.cursor()
+            # Assuming 'servers' table and these columns exist. Adjust as per actual schema.
+            query = """SELECT name, description, instructions, owner_name, owner_link,
+                              repo_link, command, args, env_vars
+                       FROM servers WHERE name = ?"""
+            cursor.execute(query, (server_name_in_tree,))
+            details_row = cursor.fetchone()
+
+            if details_row:
+                column_names = [col[0] for col in cursor.description]
+                self.selected_marketplace_server_details = dict(zip(column_names, details_row))
+                self.log(f"Fetched details: {self.selected_marketplace_server_details}")
+
+                display_text = f"Name: {self.selected_marketplace_server_details.get('name', 'N/A')}\n"
+                display_text += f"Description: {self.selected_marketplace_server_details.get('description', 'N/A')}\n\n"
+                display_text += f"Instructions:\n{self.selected_marketplace_server_details.get('instructions', 'N/A')}\n\n"
+                display_text += f"Owner: {self.selected_marketplace_server_details.get('owner_name', 'N/A')}"
+                if self.selected_marketplace_server_details.get('owner_link'):
+                    display_text += f" ({self.selected_marketplace_server_details.get('owner_link')})\n"
+                else:
+                    display_text += "\n"
+                display_text += f"Repository: {self.selected_marketplace_server_details.get('repo_link', 'N/A')}\n"
+                # Optionally, display command, args, env_vars or keep for add_server functionality
+                # display_text += f"\nCommand: {self.selected_marketplace_server_details.get('command', 'N/A')}\n"
+                # display_text += f"Args: {self.selected_marketplace_server_details.get('args', 'N/A')}\n"
+                # display_text += f"Env Vars: {self.selected_marketplace_server_details.get('env_vars', 'N/A')}\n"
+                self.server_details_text.insert('1.0', display_text)
+            else:
+                self.log(f"No details found in DB for server: {server_name_in_tree}")
+                self.server_details_text.insert('1.0', "Could not retrieve full details for the selected server.")
+
+        except sqlite3.Error as e:
+            self.log(f"SQLite error while fetching details for {server_name_in_tree}: {e}")
+            self.server_details_text.insert('1.0', f"Database error fetching details: {e}")
+        except Exception as e:
+            self.log(f"Unexpected error fetching details for {server_name_in_tree}: {e}")
+            self.server_details_text.insert('1.0', f"Unexpected error: {e}")
+        finally:
+            if conn:
+                conn.close()
+            self.server_details_text.config(state='disabled')
+
+    def download_db(self, url):
+        self.log(f"Attempting to download DB from {url} to {self.marketplace_db_path}")
+        try:
+            with urllib.request.urlopen(url) as response, open(self.marketplace_db_path, 'wb') as out_file:
+                data = response.read() # a `bytes` object
+                out_file.write(data)
+            self.log("Database downloaded successfully.")
+            return True
+        except urllib.error.URLError as e:
+            self.log(f"Error downloading database (URL Error): {e.reason}")
+            messagebox.showerror("Download Error", f"Failed to download database: {e.reason}")
+        except IOError as e:
+            self.log(f"Error saving database (IO Error): {e}")
+            messagebox.showerror("Download Error", f"Failed to save database: {e}")
+        except Exception as e:
+            self.log(f"An unexpected error occurred during database download: {e}")
+            messagebox.showerror("Download Error", f"An unexpected error occurred: {e}")
+        return False
+
+    def check_db_version(self):
+        self.log("Checking DB versions...")
+        remote_version_string = "Error"
+        try:
+            self.log(f"Fetching remote version from: {self.marketplace_version_url}")
+            with urllib.request.urlopen(self.marketplace_version_url, timeout=5) as response:
+                # Read and decode. Assume version is plain text, remove any leading/trailing whitespace
+                remote_version_string = response.read().decode('utf-8').strip()
+            self.log(f"Successfully fetched remote version: {remote_version_string}")
+        except urllib.error.URLError as e:
+            self.log(f"Error fetching remote version (URLError): {e.reason}")
+            remote_version_string = "N/A (Connection)"
+        except Exception as e:
+            self.log(f"Unexpected error fetching remote version: {e}")
+            remote_version_string = "N/A (Error)"
+
+        if hasattr(self, 'remote_db_version_label'): # Ensure GUI is initialized
+            self.remote_db_version_label.config(text=f"Remote DB: {remote_version_string}")
+
+        local_version_string = "N/A"
+        self.log(f"Checking local DB at: {self.marketplace_db_path}")
+        if self.marketplace_db_path.exists():
+            conn = None
+            try:
+                conn = sqlite3.connect(self.marketplace_db_path)
+                cursor = conn.cursor()
+                # Ensure the table and query are correct.
+                # This assumes a 'metadata' table with 'key' and 'value' columns.
+                cursor.execute("SELECT value FROM metadata WHERE key = 'version'")
+                row = cursor.fetchone()
+                if row:
+                    local_version_string = row[0]
+                    self.log(f"Found local DB version: {local_version_string}")
+                else:
+                    local_version_string = "Unknown (no version)"
+                    self.log("Local DB version key not found in metadata.")
+            except sqlite3.Error as e:
+                # This can happen if the DB is not initialized, table doesn't exist, etc.
+                self.log(f"SQLite error while reading local DB version: {e}")
+                local_version_string = "Unknown (DB error)"
+            except Exception as e:
+                self.log(f"Unexpected error reading local DB version: {e}")
+                local_version_string = "Error"
+            finally:
+                if conn:
+                    conn.close()
+        else:
+            local_version_string = "Not found"
+            self.log("Local DB file does not exist.")
+
+        if hasattr(self, 'local_db_version_label'): # Ensure GUI is initialized
+            self.local_db_version_label.config(text=f"Local DB: {local_version_string}")
+
+        self.log(f"DB Versions - Local: {local_version_string}, Remote: {remote_version_string}")
+
+    def update_local_db(self):
+        self.log("Starting local marketplace database update process...")
+        # Consider disabling update_db_button here if it's a long process
+        # self.update_db_button.config(state=tk.DISABLED)
+
+        download_success = self.download_db(self.marketplace_db_url)
+
+        if download_success:
+            self.log("Database download successful. Refreshing versions and server list.")
+            self.check_db_version()  # Refresh local and remote version labels
+            self.load_marketplace_servers()  # Refresh the treeview
+            messagebox.showinfo("Success", "Marketplace database updated successfully.")
+            self.log("Marketplace database update process completed successfully.")
+        else:
+            self.log("Database download failed.")
+            messagebox.showerror("Error", "Failed to update marketplace database. Check logs for details.")
+            self.log("Marketplace database update process failed.")
+
+        # Re-enable button if it was disabled
+        # if hasattr(self, 'update_db_button'):
+        #     self.update_db_button.config(state=tk.NORMAL)
+
+    def load_marketplace_servers(self, search_term=None):
+        self.log(f"Loading marketplace servers. Search term: '{search_term if search_term else ''}'")
+
+        # Clear existing treeview items
+        for item in self.marketplace_tree.get_children():
+            self.marketplace_tree.delete(item)
+
+        if not self.marketplace_db_path.exists():
+            self.log("Marketplace database file not found.")
+            self.marketplace_tree.insert('', 'end', values=("Database not found. Please update.", "", ""))
+            return
+
+        servers_data = []
+        conn = None
+        try:
+            conn = sqlite3.connect(self.marketplace_db_path)
+            cursor = conn.cursor()
+
+            query_params = []
+            sql_query = "SELECT name, description, owner_name FROM servers" # Ensure 'owner_name' is the correct column name
+
+            if search_term:
+                sql_query += " WHERE name LIKE ? OR description LIKE ?"
+                # Potentially add more fields to search, e.g. owner_name:
+                # sql_query += " OR owner_name LIKE ?"
+                # query_params.extend([f"%{search_term}%", f"%{search_term}%", f"%{search_term}%"])
+                query_params.extend([f"%{search_term}%", f"%{search_term}%"])
+
+            self.log(f"Executing SQL: {sql_query} with params: {query_params}")
+            cursor.execute(sql_query, query_params)
+            servers_data = cursor.fetchall()
+
+        except sqlite3.Error as e:
+            self.log(f"Error loading marketplace servers: {e}")
+            self.marketplace_tree.insert('', 'end', values=(f"Error loading servers: {e}", "", ""))
+            return # Return early on error
+        except Exception as e: # Catch any other unexpected errors
+            self.log(f"Unexpected error loading marketplace servers: {e}")
+            self.marketplace_tree.insert('', 'end', values=(f"Unexpected error: {e}", "", ""))
+            return
+        finally:
+            if conn:
+                conn.close()
+
+        if servers_data:
+            for server_row in servers_data:
+                self.marketplace_tree.insert('', 'end', values=server_row)
+            self.log(f"Loaded {len(servers_data)} servers into the marketplace tree.")
+        else:
+            self.log("No servers found matching the criteria.")
+            self.marketplace_tree.insert('', 'end', values=("No servers found.", "", ""))
+
+    def add_server_from_marketplace(self):
+        self.log("Attempting to add server from marketplace...")
+
+        if not self.selected_marketplace_server_details:
+            messagebox.showwarning("No Server Selected", "Please select a server from the marketplace list first and ensure its details are loaded.")
+            self.log("Add server from marketplace failed: No server details selected.")
+            return
+
+        details = self.selected_marketplace_server_details
+        name = details.get('name')
+        command = details.get('command')
+        args_str = details.get('args', '[]') # Default to JSON string for an empty list
+        env_str = details.get('env_vars', '{}') # Default to JSON string for an empty dict
+
+        if not name or not command:
+            messagebox.showerror("Configuration Error", "Selected server has incomplete configuration (missing name or command). Cannot add.")
+            self.log(f"Add server from marketplace failed: Missing name or command for server '{name}'.")
+            return
+
+        try:
+            args = json.loads(args_str)
+            if not isinstance(args, list):
+                self.log(f"Parsed 'args' for server '{name}' is not a list: {args}. Defaulting to empty list.")
+                args = []
+        except json.JSONDecodeError as e:
+            messagebox.showerror("Configuration Error", f"Could not parse 'args' for '{name}': {e}. Please ensure it's a valid JSON list (e.g., [\"arg1\", \"arg2\"]).")
+            self.log(f"Add server from marketplace failed: JSONDecodeError for args of server '{name}': {e}")
+            return
+
+        try:
+            env = json.loads(env_str)
+            if not isinstance(env, dict):
+                self.log(f"Parsed 'env_vars' for server '{name}' is not a dictionary: {env}. Defaulting to empty dict.")
+                env = {}
+        except json.JSONDecodeError as e:
+            messagebox.showerror("Configuration Error", f"Could not parse 'env_vars' for '{name}': {e}. Please ensure it's a valid JSON object (e.g., {{\"KEY\": \"value\"}}).")
+            self.log(f"Add server from marketplace failed: JSONDecodeError for env_vars of server '{name}': {e}")
+            return
+
+        if name in self.mcp_config:
+            if not messagebox.askyesno("Confirm Overwrite", f"Server '{name}' already exists in your MCP Servers. Overwrite it?"):
+                self.log(f"User cancelled overwriting existing server '{name}'.")
+                return
+            self.log(f"User confirmed overwriting existing server '{name}'.")
+
+        server_config = {'command': command}
+        if args: # Only add 'args' key if args list is not empty
+            server_config['args'] = args
+        if env:  # Only add 'env' key if env dict is not empty
+            server_config['env'] = env
+
+        self.mcp_config[name] = server_config
+        self.paused_servers.discard(name)  # Ensure the server is active
+
+        self.refresh_server_list()  # Update the tree in the main "MCP Servers" tab
+        messagebox.showinfo("Success", f"Server '{name}' added/updated in MCP Manager.")
+        self.log(f"Server '{name}' successfully added/updated from marketplace with config: {server_config}")
+
     def setup_settings_tab(self, settings_tab):
         """Setup the settings tab for path configuration"""
         settings_frame = ttk.Frame(settings_tab, padding="20")
@@ -461,17 +828,31 @@ Environment variables like %APPDATA%, %LOCALAPPDATA%, ~ are supported."""
         config_frame.grid(row=1, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, 10))
         config_frame.columnconfigure(1, weight=1)
         
-        ttk.Label(config_frame, text="Config File:").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(config_frame, text="Config File:").grid(row=0, column=0, sticky=tk.W, pady=(0,2))
         self.config_path_var = tk.StringVar(value=str(self.config_path))
         config_entry = ttk.Entry(config_frame, textvariable=self.config_path_var, state='readonly')
-        config_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(5, 0))
+        config_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(5, 0), pady=(0,2))
         
-        ttk.Button(config_frame, text="Browse", command=self.browse_config).grid(row=0, column=2, padx=(5, 0))
+        ttk.Button(config_frame, text="Browse", command=self.browse_config).grid(row=0, column=2, padx=(5, 0), pady=(0,2))
         
+        # App Version and Update button
+        app_info_frame = ttk.Frame(config_frame)
+        app_info_frame.grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=(5,0))
+
+        self.current_app_version_label = ttk.Label(app_info_frame, text=f"Version: {MCPManager.APP_VERSION}")
+        self.current_app_version_label.pack(side=tk.LEFT, padx=(0,10))
+
+        self.update_app_button = ttk.Button(app_info_frame, text="Check for Updates", command=self.open_releases_page)
+        self.update_app_button.pack(side=tk.LEFT)
+        # The button's text/state will be updated by check_app_version
+        # Initially, we can hide it or set to a default state if preferred:
+        # self.update_app_button.pack_forget()
+
+
         # Status
         self.status_var = tk.StringVar(value="Ready")
         status_label = ttk.Label(config_frame, textvariable=self.status_var, foreground="green")
-        status_label.grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=(5, 0))
+        status_label.grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=(5, 0)) # Adjusted row
         
         # Server list frame
         list_frame = ttk.LabelFrame(main_frame, text="MCP Servers", padding="5")

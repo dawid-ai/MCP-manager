@@ -54,8 +54,14 @@ jobs:
         tkinter.Tk = MockTk
         
         # Now test import
+        # Preserve and alter __name__ to prevent mcp_manager.main() from running
+        _original_dunder_name = __name__
+        __name__ = 'testing_import_mode' 
         try:
-            exec(open('mcp_manager.py').read())
+            # execfile is not available in Py3, use exec(open(...).read())
+            with open('mcp_manager.py', 'r') as f_mcp:
+                mcp_code = f_mcp.read()
+            exec(mcp_code)
             print('✅ Application code validated successfully')
         except Exception as e:
             print(f'❌ Import failed: {e}')
@@ -64,6 +70,8 @@ jobs:
                 import traceback
                 traceback.print_exc(file=f_err)
             sys.exit(1)
+        finally:
+            __name__ = _original_dunder_name # Restore __name__
         "
     - name: Display Import Error (Linux/macOS)
       if: runner.os != 'Windows' && failure()

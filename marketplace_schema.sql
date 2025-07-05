@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS servers (
     repo_link TEXT,                       -- URL to the server's source code repository (e.g., GitHub)
     command TEXT NOT NULL,                -- The command needed to run the MCP server
     args TEXT,                            -- JSON string array of arguments for the command (e.g., "["--port", "8080"]"). Store as '[]' if no arguments.
-    env_vars TEXT                         -- JSON string object of environment variables (e.g., "{\"API_KEY\": \"secret\"}"). Store as '{}' if no environment variables.
+    env_vars TEXT,                        -- JSON string object of environment variables (e.g., "{\"API_KEY\": \"secret\"}"). Store as '{}' if no environment variables.
+    date_added TEXT                       -- ISO8601 timestamp of when the server was added
 );
 
 -- Example of how to insert a server (optional, for reference):

@@ -52,9 +52,11 @@ class MCPManager:
         self.mcp_config = {}
         self.paused_servers = set()  # Servers that are paused (not in config but saved in our tool)
         self.selected_marketplace_server_details = None # For storing full details of selected marketplace server
+        self.has_unsaved_changes = False
         
         # Create GUI
         self.create_widgets()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing_app)
         self.log(f"MCP Manager started")
         self.log(f"Config path: {self.config_path}")
         self.log(f"Config exists: {self.config_path.exists()}")
@@ -960,10 +962,39 @@ Attribution to https://dawid.ai must be maintained in distributions.
 
         self.mcp_config[name] = server_config
         self.paused_servers.discard(name)  # Ensure the server is active
+        self.has_unsaved_changes = True
 
         self.refresh_server_list()  # Update the tree in the main "MCP Servers" tab
         messagebox.showinfo("Success", f"Server '{name}' added/updated in MCP Manager.")
         self.log(f"Server '{name}' successfully added/updated from marketplace with config: {server_config}")
+
+    def open_json_import_dialog_for_mcp(self):
+        self.log("Opening Import MCP Server from JSON dialog...")
+        dialog = MCPJSONImportDialog(self.root, title="Import MCP Server from JSON")
+        # self.root.wait_window(dialog.dialog) # simpledialog.Dialog handles this
+
+        if dialog.result:
+            server_name, server_config = dialog.result
+            self.log(f"Attempting to import server: {server_name} with config: {server_config}")
+
+            if server_name in self.mcp_config:
+                if not messagebox.askyesno("Confirm Overwrite",
+                                           f"Server '{server_name}' already exists in your MCP Servers. Overwrite it?",
+                                           parent=self.root): # Ensure dialog is parented correctly
+                    self.log(f"User cancelled overwriting existing server '{server_name}'.")
+                    return
+                self.log(f"User confirmed overwriting existing server '{server_name}'.")
+
+            self.mcp_config[server_name] = server_config
+            self.paused_servers.discard(server_name)  # Ensure the server is active
+            self.has_unsaved_changes = True
+
+            self.refresh_server_list()
+            messagebox.showinfo("Success", f"Server '{server_name}' imported successfully into MCP Manager.")
+            self.log(f"Server '{server_name}' successfully imported.")
+            self.status_var.set(f"Imported server: {server_name}")
+        else:
+            self.log("Import MCP Server from JSON dialog cancelled or no result.")
 
     # open_releases_page and check_app_version are moved above create_widgets
 
@@ -1187,6 +1218,7 @@ Environment variables like %APPDATA%, %LOCALAPPDATA%, ~ are supported."""
         
         # Server management buttons
         ttk.Button(button_frame, text="Add Server", command=self.add_server).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="Import from JSON", command=self.open_json_import_dialog_for_mcp).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="Edit Server", command=self.edit_server).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="Remove Server", command=self.remove_server).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="Pause/Resume", command=self.toggle_pause).pack(side=tk.LEFT, padx=(0, 15))
@@ -1246,6 +1278,20 @@ Environment variables like %APPDATA%, %LOCALAPPDATA%, ~ are supported."""
     
     def load_config(self):
         """Load configuration from JSON file"""
+        if self.has_unsaved_changes:
+            response = messagebox.askyesnocancel(
+                "Unsaved Changes",
+                "You have unsaved changes. Do you want to save them before reloading?",
+                parent=self.root
+            )
+            if response is True:  # Yes
+                self.save_config()
+                # Proceed with reload even if save failed, as user chose to save.
+            elif response is None:  # Cancel
+                self.log("Reload config cancelled by user due to unsaved changes.")
+                return # Abort reload
+            # If False (No), proceed to reload, overwriting changes.
+
         try:
             self.log(f"Loading config from: {self.config_path}")
             if self.config_path.exists():
@@ -1255,26 +1301,55 @@ Environment variables like %APPDATA%, %LOCALAPPDATA%, ~ are supported."""
                 self.log(f"Loaded {len(self.mcp_config)} servers from config")
                 self.log(f"Server names: {list(self.mcp_config.keys())}")
                 self.status_var.set(f"Loaded {len(self.mcp_config)} servers from config")
+                self.has_unsaved_changes = False # Reset flag after successful load
             else:
                 self.mcp_config = {}
                 self.log("Config file not found - will create new one")
                 self.status_var.set("Config file not found - will create new one")
+                self.has_unsaved_changes = False # No config to have unsaved changes against
+
+            self.refresh_server_list() # Refresh list after loading
+
         except Exception as e:
             error_msg = f"Failed to load config: {str(e)}\n{traceback.format_exc()}"
             self.log(error_msg)
             messagebox.showerror("Error", f"Failed to load config: {str(e)}")
             self.status_var.set("Error loading config")
-    
+        # If loading failed partway, changes might still be considered unsaved
+        # However, typical case is loading successfully, which resets unsaved status.
+        # self.has_unsaved_changes = False # This is now at the end of successful load
+
+    def on_closing_app(self):
+        if self.has_unsaved_changes:
+            response = messagebox.askyesnocancel(
+                "Unsaved Changes",
+                "You have unsaved changes. Do you want to save them before closing?",
+                parent=self.root
+            )
+            if response is True:  # Yes
+                self.save_config() # Attempt to save
+                self.root.destroy()
+            elif response is False:  # No
+                self.root.destroy()
+            else:  # Cancel
+                return  # Do nothing, keep app open
+        else:
+            self.root.destroy()
+
     def save_config(self):
-        """Save configuration to JSON file"""
+        """Save configuration to JSON file (excluding paused servers)"""
         try:
+            self.log("Starting save config process...")
+
             # Create backup first
             if self.config_path.exists():
                 backup_path = self.backup_dir / f"claude_desktop_config_backup_{int(os.path.getmtime(self.config_path))}.json"
                 shutil.copy2(self.config_path, backup_path)
+                self.log(f"Backup created: {backup_path}")
             
             # Ensure directory exists
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
+            self.log(f"Config directory created/verified: {self.config_path.parent}")
             
             # Load existing config or create new one
             config = {}
@@ -1282,22 +1357,36 @@ Environment variables like %APPDATA%, %LOCALAPPDATA%, ~ are supported."""
                 try:
                     with open(self.config_path, 'r', encoding='utf-8') as f:
                         config = json.load(f)
-                except:
-                    pass
+                        self.log("Loaded existing config file")
+                except Exception as e:
+                    self.log(f"Error loading existing config: {e}")
+                    config = {}
+
+            # Update MCP servers (excluding paused ones)
+            active_servers = self.get_actual_config_for_save()
+            config['mcpServers'] = active_servers
             
-            # Update MCP servers
-            config['mcpServers'] = self.mcp_config
+            self.log(f"Active servers to save: {active_servers}")
+            self.log(f"Full config to save: {config}")
             
             # Save config
             with open(self.config_path, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=2, ensure_ascii=False)
             
-            self.status_var.set("Configuration saved successfully")
-            messagebox.showinfo("Success", "Configuration saved successfully!")
+            active_count = len(config['mcpServers'])
+            paused_count = len(self.paused_servers)
+
+            self.log(f"Config saved successfully. Active: {active_count}, Paused: {paused_count}")
+            self.status_var.set(f"Saved {active_count} active servers ({paused_count} paused)")
+            messagebox.showinfo("Success", f"Configuration saved!\nActive: {active_count}, Paused: {paused_count}")
+            self.has_unsaved_changes = False # Reset flag after successful save
             
         except Exception as e:
+            error_msg = f"Failed to save config: {str(e)}\n{traceback.format_exc()}"
+            self.log(error_msg)
             messagebox.showerror("Error", f"Failed to save config: {str(e)}")
             self.status_var.set("Error saving config")
+            # Do not reset has_unsaved_changes if save failed
     
     def backup_config(self):
         """Create a backup of the current configuration"""
@@ -1367,6 +1456,7 @@ Environment variables like %APPDATA%, %LOCALAPPDATA%, ~ are supported."""
             
             self.log(f"Server added to config: {name} -> {server_config}")
             self.log(f"Current mcp_config: {self.mcp_config}")
+            self.has_unsaved_changes = True
             
             self.refresh_server_list()
             self.status_var.set(f"Added server: {name}")
@@ -1410,6 +1500,7 @@ Environment variables like %APPDATA%, %LOCALAPPDATA%, ~ are supported."""
             
             self.mcp_config[new_name] = server_config
             self.paused_servers.discard(new_name)
+            self.has_unsaved_changes = True
             self.refresh_server_list()
             self.status_var.set(f"Updated server: {new_name}")
     
@@ -1426,6 +1517,7 @@ Environment variables like %APPDATA%, %LOCALAPPDATA%, ~ are supported."""
         if messagebox.askyesno("Confirm", f"Remove server '{name}' completely?"):
             self.mcp_config.pop(name, None)
             self.paused_servers.discard(name)
+            self.has_unsaved_changes = True
             self.refresh_server_list()
             self.status_var.set(f"Removed server: {name}")
     
@@ -1456,6 +1548,7 @@ Environment variables like %APPDATA%, %LOCALAPPDATA%, ~ are supported."""
                 messagebox.showwarning("Warning", f"Cannot pause '{name}': not found in configuration")
                 return
         
+        self.has_unsaved_changes = True
         self.refresh_server_list()
     
     def get_actual_config_for_save(self):
@@ -1675,6 +1768,115 @@ class ServerDialog:
         # Bind Enter key to OK (but not when in text widget)
         self.dialog.bind('<Return>', lambda e: self.ok_clicked() if e.widget != self.env_text else None)
         self.dialog.bind('<Escape>', lambda e: self.cancel_clicked())
+
+class MCPJSONImportDialog(simpledialog.Dialog):
+    def body(self, master):
+        self.master = master # Keep a reference for parenting messageboxes
+        master.pack_forget() # Hide the default simpledialog frame
+
+        # Dialog settings
+        self.parent.title("Import MCP Server from JSON")
+        # self.parent.geometry("500x400") # Adjust as needed
+
+        # Main frame for content
+        # Using self.parent as it's the Toplevel window
+        content_frame = ttk.Frame(self.parent, padding="10")
+        content_frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(content_frame,
+                  text="Paste JSON for one or more MCP servers below.",
+                  wraplength=480).pack(pady=5, anchor=tk.W)
+        ttk.Label(content_frame,
+                  text="Expected format: {\"mcpServers\": {\"server_name\": {\"command\": ..., \"args\": ..., \"env\": ...}}}",
+                  font=('Arial', 8), foreground='gray', wraplength=480).pack(pady=(0,10), anchor=tk.W)
+
+        self.json_text_widget = scrolledtext.ScrolledText(content_frame, width=60, height=15, wrap=tk.WORD)
+        self.json_text_widget.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.json_text_widget.focus_set()
+
+        self.result = None
+        return self.json_text_widget # initial focus
+
+    def buttonbox(self):
+        # Overriding buttonbox to use ttk buttons and place them in our content_frame
+        # The master frame from simpledialog.Dialog is not used directly for content.
+        # Instead, we add buttons to the Toplevel window (self.parent) or a frame within it.
+
+        # Find the content_frame we created in body()
+        # This assumes content_frame is the first child of self.parent, which might be fragile.
+        # A better way would be to store content_frame as self.content_frame in body().
+        # For now, let's assume self.parent is where we want to add the button box.
+        # We will add buttons to a new frame at the bottom of self.parent (Toplevel)
+
+        box = ttk.Frame(self.parent, padding=(0,0,0,10)) # Add padding only at the bottom
+
+        w = ttk.Button(box, text="Import", width=10, command=self.ok, default=tk.ACTIVE)
+        w.pack(side=tk.LEFT, padx=5, pady=5)
+        w = ttk.Button(box, text="Cancel", width=10, command=self.cancel)
+        w.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.bind("<Return>", self.ok)
+        self.bind("<Escape>", self.cancel)
+
+        box.pack(side=tk.BOTTOM) # Pack the button box at the bottom of the dialog
+
+    def validate(self):
+        json_string = self.json_text_widget.get("1.0", tk.END).strip()
+        if not json_string:
+            messagebox.showerror("Error", "JSON input is empty.", parent=self.parent)
+            return 0
+
+        try:
+            data = json.loads(json_string)
+        except json.JSONDecodeError as e:
+            messagebox.showerror("JSON Error", f"Invalid JSON: {e}", parent=self.parent)
+            return 0
+
+        if not isinstance(data, dict) or "mcpServers" not in data:
+            messagebox.showerror("JSON Error", "JSON must be an object with an 'mcpServers' key.", parent=self.parent)
+            return 0
+
+        mcp_servers = data["mcpServers"]
+        if not isinstance(mcp_servers, dict) or not mcp_servers:
+            messagebox.showerror("JSON Error", "'mcpServers' must be a non-empty object.", parent=self.parent)
+            return 0
+
+        # Extract the first server
+        # (In a more complex scenario, you might let the user choose if multiple are present)
+        server_name = list(mcp_servers.keys())[0]
+        server_config = mcp_servers[server_name]
+
+        if not isinstance(server_config, dict) or "command" not in server_config:
+            messagebox.showerror("JSON Error", f"Server '{server_name}' is missing 'command' or is not an object.", parent=self.parent)
+            return 0
+
+        # Validate args and env structure (optional but good practice)
+        if "args" in server_config and not isinstance(server_config["args"], list):
+            messagebox.showerror("JSON Error", f"Server '{server_name}' 'args' must be a list.", parent=self.parent)
+            return 0
+        if "env" in server_config and not isinstance(server_config["env"], dict):
+            messagebox.showerror("JSON Error", f"Server '{server_name}' 'env' must be an object.", parent=self.parent)
+            return 0
+
+        # Store the result
+        self.result = (server_name, {
+            "command": server_config.get("command"),
+            "args": server_config.get("args", []), # Default to empty list
+            "env": server_config.get("env", {})    # Default to empty dict
+        })
+
+        if len(mcp_servers) > 1:
+             messagebox.showinfo("Info", f"Multiple servers found in JSON. Importing the first one: '{server_name}'.", parent=self.parent)
+
+        return 1 # Validation successful
+
+    # apply() is called by ok() if validate() is successful
+    # We don't need to do anything special here as result is already set in validate()
+    # def apply(self):
+    #     pass
+
+
+# ServerDialog class for adding/editing servers manually
         
         # Focus on name field
         name_entry.focus_set()

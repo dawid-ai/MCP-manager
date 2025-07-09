@@ -82,7 +82,7 @@ jobs:
     - name: Test application (Windows)
       if: runner.os == 'Windows'
       run: |
-        python -c "print('✅ Python installation verified')"
+        python -c "print('Python installation verified')"
 
     - name: Build executable
       run: |

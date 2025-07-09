@@ -102,9 +102,17 @@ jobs:
       run: |
         pyinstaller --onefile --windowed --name "Claude-MCP-Manager-${{ matrix.os }}-py${{ matrix.python-version }}" mcp_manager.py
 
-    - name: List build output
+    - name: List build output (Linux/macOS)
+      if: runner.os != 'Windows'
+      shell: bash
       run: |
         ls -la dist/
+
+    - name: List build output (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        Get-ChildItem dist/
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4

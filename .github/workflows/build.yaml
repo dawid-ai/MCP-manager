@@ -24,14 +24,19 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
-    - name: Verify Python installation
+    - name: Verify Python installation (Linux/macOS)
+      if: runner.os != 'Windows'
+      shell: bash
       run: |
         python --version
-        if ($env:RUNNER_OS -eq "Windows") {
-          where python
-        } else {
-          which python
-        }
+        which python
+
+    - name: Verify Python installation (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        python --version
+        where python
 
     - name: Install dependencies
       run: |

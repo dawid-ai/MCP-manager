@@ -27,7 +27,11 @@ jobs:
     - name: Verify Python installation
       run: |
         python --version
-        where python
+        if [ "$RUNNER_OS" == "Windows" ]; then
+          where python
+        else
+          which python
+        fi
 
     - name: Install dependencies
       run: |
